@@ -1,0 +1,277 @@
+---
+title: "Forecasting Non-Stationary Data (Rataan & Ragam)"
+author: "Muhammad Hafiz Fazli"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme:
+      version: 4
+      bg: "#2D2A2E"
+      fg: "#E3E3E3"
+      primary: "#A6E22E"
+      secondary: "#FD971F"
+      base_font: {google: "Fira Code"}
+    toc: true
+    toc_float: true
+    number_sections: false
+    code_folding: show
+    highlight: espresso
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup Environment
+
+## Import Dependencies
+
+```{r}
+library(readr)
+library(tsibble)
+library(ggplot2)
+library(tseries)
+library(lattice)
+library(MASS)
+```
+
+## Load Data
+
+```{r}
+df <- read_csv("C:/Users/Muhammad Hafiz F/Downloads/Telur Ayam Ras_Nov23-Apr24.csv")
+
+names(df)[names(df) == "Jawa Barat"] <- "Harga"
+
+df
+```
+
+## Train-Test Split
+
+```{r}
+n <- nrow(df)
+n_train <- floor(0.8 * n)
+
+train <- df[1:n_train, ]
+test  <- df[(n_train+1):n, ]
+
+dim(train)
+dim(test)
+
+train
+test
+```
+
+# Cek Stasioneritas dalam Rataan
+
+## Plot Time Series
+
+```{r}
+ts <- train$Harga
+
+ts_tbl <- tibble(
+  index = 1:length(ts),
+  value = ts
+)
+
+plot_ts <- ts_tbl |> 
+  as_tsibble(index = index) |> 
+  ggplot(aes(x = index, y = value)) + 
+  geom_line() + theme_bw() +
+  xlab("Obs") + ylab("Nilai")
+
+plot_ts
+```
+
+**Interpretasi:** 
+
+> Plot deret waktu di atas menunjukkan bahwa data belum stasioner dalam rataan, ditandai dengan adanya tren meningkat dan menurun yang cukup jelas, sehingga nilai tidak menyebar secara konsisten di sekitar satu titik tengah.
+
+## Plot ACF
+
+```{r}
+acf(ts)
+```
+
+**Interpretasi:** 
+
+> Berdasarkan plot ACF, terlihat bahwa nilai autokorelasi sangat tinggi pada lag awal dan menurun secara perlahan (tails off). Pola ini menunjukkan bahwa data memiliki tren kuat dan belum stasioner.
+
+
+## Uji Augmented Dickey-Fuller (ADF)
+
+```{r}
+tseries::adf.test(ts)
+```
+
+**Interpretasi:** 
+
+> Berdasarkan uji ADF, diperoleh p-value sebesar 0.99 yang lebih besar dari taraf nyata 5%. Dengan demikian, gagal menolak hipotesis nol sehingga data tidak stasioner dalam rataan. Hal ini konsisten dengan hasil eksplorasi menggunakan plot deret waktu yang menunjukkan adanya tren, serta plot ACF yang tidak cepat turun ke nol.
+
+# Cek Stasioneritas dalam Ragam
+## Plot Box-Cox
+```{r}
+index <- seq_along(ts)
+
+bc <- boxcox(
+  ts ~ index,
+  lambda = seq(-1, 4, by = 0.01)
+)
+
+lambda <- bc$x[which.max(bc$y)]
+lambda
+
+ci_lambda <- bc$x[bc$y > max(bc$y) - 0.5 * qchisq(0.95, 1)]
+
+ci_lower <- min(ci_lambda)
+ci_upper <- max(ci_lambda)
+
+c(Batas_Bawah = ci_lower, Batas_Atas = ci_upper)
+```
+
+**Interpretasi:** 
+
+> Gambar di atas menunjukkan nilai lambda optimum (dibulatkan) sebesar -1 dan selang kepercayaan 95% berada pada batas bawah -1,00 dan batas atas -0,42. Karena selang tersebut tidak memuat nilai satu, maka dapat dikatakan bahwa data tidak stasioner dalam ragam.
+
+
+# Handling Non-Stationary Data (Rataan & Ragam)
+## Differencing
+```{r}
+ts_diff1 <- diff(ts, differences = 1)
+
+tseries::adf.test(ts_diff1)
+
+epsilon <- 1e-6
+ts_diff1_pos <- ts_diff1 - min(ts_diff1) + epsilon
+
+index <- seq_along(ts_diff1_pos)
+
+bc <- boxcox(
+  lm(ts_diff1_pos ~ index),
+  lambda = seq(-1, 4, by = 0.01)
+)
+
+lambda <- bc$x[which.max(bc$y)]
+lambda
+
+ci_lambda <- bc$x[bc$y > max(bc$y) - 0.5 * qchisq(0.95, 1)]
+
+ci_lower <- min(ci_lambda)
+ci_upper <- max(ci_lambda)
+
+c(Batas_Bawah = ci_lower, Batas_Atas = ci_upper)
+```
+
+**Interpretasi:**
+
+> Berdasarkan uji ADF setelah differencing, diperoleh p-value sebesar 0.01307 yang lebih kecil dari taraf nyata 5%. Dengan demikian, tolak hipotesis nol sehingga data stasioner dalam rataan.
+Plot Box-Cox di atas menunjukkan nilai lambda optimum (dibulatkan) sebesar 0,74 dan selang kepercayaan 95% berada pada batas bawah 0,57 dan batas atas 0,94. Karena selang tersebut tidak memuat nilai satu, maka dapat dikatakan bahwa data tidak stasioner dalam ragam dan transformasi lebih lanjut diperlukan untuk menstabilkan varians.
+
+## Box-Cox Transformation
+```{r}
+boxcox_transform <- function(x, lam) {
+  if (abs(lam) < 1e-8) log(x) else (x^lam - 1) / lam
+}
+
+ts_diff1_bc <- boxcox_transform(ts_diff1_pos, lambda)
+```
+
+## Shift Back to Original Scale
+```{r}
+shift_val <- -min(ts_diff1) + epsilon
+
+ts_diff1_bc_back <- ts_diff1_bc - shift_val
+
+summary(ts_diff1_bc_back)
+```
+
+**Kesimpulan:**
+
+> Setelah dilakukan differencing dan transformasi Box–Cox, data kini stasioner baik dalam rataan maupun ragam.
+
+# Tugas Pertemuan 6 (Lanjutan)
+## Identifikasi Model
+```{r}
+par(mfrow = c(1,2))
+acf(ts_diff1_bc, main="ACF")
+pacf(ts_diff1_bc, main="PACF")
+par(mfrow = c(1,1))
+```
+
+**Interpretasi ACF–PACF**
+
+> Plot ACF menunjukkan pola cut-off pada lag 1, indikasi keberadaan komponen MA(1).
+Plot PACF menunjukkan spike signifikan pada lag 1, indikasi keberadaan komponen AR(1).
+Karena data telah stasioner setelah differencing, model tentatif yang layak dicoba adalah ARIMA(0,1,1), ARIMA(1,1,0), dan ARIMA(1,1,1).
+
+## Pendugaan Parameter Model Tentatif
+```{r}
+library(forecast)
+
+fit1 <- Arima(ts, order=c(0,1,1), lambda=lambda)
+fit2 <- Arima(ts, order=c(1,1,0), lambda=lambda)
+fit3 <- Arima(ts, order=c(1,1,1), lambda=lambda)
+
+fit1
+fit2
+fit3
+```
+
+**Interpretasi Model Tentatif**
+
+> Berdasarkan perbandingan nilai AIC, model ARIMA(1,1,1) memiliki nilai AIC paling rendah (996.01), lebih kecil daripada ARIMA(0,1,1) maupun ARIMA(1,1,0). Dengan demikian, ARIMA(1,1,1) dipilih sebagai model terbaik karena memberikan keseimbangan terbaik antara kompleksitas model dan goodness-of-fit.
+
+## Analisis Sisa
+```{r}
+checkresiduals(fit3)
+```
+
+**Interpretasi Analisis Sisa**
+
+> - Plot residual vs waktu (atas kiri): pola residual terlihat acak tanpa tren tertentu, meskipun terdapat beberapa lonjakan, tetapi secara umum tidak menunjukkan pola sistematis.
+> - ACF residual (bawah kiri): sebagian besar lag berada dalam batas signifikansi → menunjukkan tidak ada autokorelasi yang berarti. Ini konsisten dengan asumsi white noise.
+> - Histogram residual (bawah kanan): distribusi residual relatif simetris dan mendekati normal, meskipun ada sedikit penyimpangan pada ekor (tail).
+
+*Kesimpulan:*
+
+Model ARIMA(1,1,1) menghasilkan residual yang menyerupai white noise: tidak ada autokorelasi signifikan, distribusi relatif normal, dan varians cukup konstan. Dengan demikian, asumsi dasar model ARIMA terpenuhi sehingga model ini dapat dianggap layak digunakan.
+
+## Overfitting
+```{r}
+fit_over <- Arima(ts, order=c(2,1,2), lambda=lambda)
+
+AIC(fit3, fit_over)
+```
+
+**Interpretasi:** 
+
+> Hasil perbandingan menunjukkan bahwa model ARIMA(2,1,2) memiliki AIC lebih rendah (984.26) dibanding ARIMA(1,1,1) (996.01). Penurunan AIC ini cukup substansial sehingga secara statistik ARIMA(2,1,2) lebih baik. Namun, model ini juga lebih kompleks dengan jumlah parameter yang lebih banyak. Oleh karena itu, pemilihan model akhir dapat disesuaikan dengan tujuan analisis:  
+> - Jika fokus pada akurasi peramalan → ARIMA(2,1,2) lebih unggul.  
+> - Jika fokus pada model yang sederhana dan interpretatif → ARIMA(1,1,1) sudah memadai.
+
+## Model Terbaik
+```{r}
+best_model <- fit3
+summary(best_model)
+```
+
+## Peramalan pada Data Test
+```{r}
+test_ts <- ts(test$Harga, start = length(train$Harga) + 1, frequency = 1)
+
+fc <- forecast(best_model, h = nrow(test))
+
+autoplot(fc) +
+  autolayer(test_ts, series = "Test Data") +
+  xlab("Waktu") + ylab("Harga") +
+  ggtitle("Peramalan dengan ARIMA")
+
+accuracy(fc, test$Harga)
+```
+
+**Interpretasi Peramalan**
+
+> - Model ARIMA(1,1,1) dengan transformasi Box-Cox (λ = 0.74) menghasilkan koefisien AR(1) ≈ 0.99 dan MA(1) ≈ -0.91, keduanya signifikan.
+> - Nilai AIC = 996.01 relatif rendah dibanding kandidat model sebelumnya, menguatkan bahwa model ini sesuai.
+> - Dari akurasi training set, diperoleh RMSE ≈ 185.47 dan MAPE ≈ 0.48%. Angka MAPE yang kecil menunjukkan bahwa model cukup akurat dalam menjelaskan data historis.
+> - Pada grafik, hasil peramalan cenderung mengikuti pola tren data, namun terdapat deviasi terhadap data uji (test data) terutama pada periode akhir, yang menunjukkan bahwa model sedikit underestimate/overestimate saat tren berubah arah.
+> - Interval prediksi (shaded area) mencerminkan ketidakpastian, semakin lebar seiring bertambahnya horizon peramalan. Test data masih berada dalam interval prediksi, menandakan model tetap relevan walau akurasi menurun pada horizon lebih panjang.
